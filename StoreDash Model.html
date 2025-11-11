@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>StoreDash Ecosystem Interactive Map</title>
+    <!-- Load Tailwind CSS --><script src="https://cdn.tailwindcss.com"></script>
+    <!-- Load D3.js --><script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        /* Custom font and base dark theme */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0d1222; /* Deep Navy Background */
+            color: #e0e7ff;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden; /* Hide potential scrollbars */
+        }
+        #chart-container {
+            flex-grow: 1;
+            position: relative;
+            overflow: hidden;
+        }
+        svg {
+            display: block;
+        }
+
+        /* D3 Node Styling */
+        .node {
+            cursor: pointer;
+            transition: transform 0.1s ease;
+            filter: drop-shadow(0 0 4px rgba(0, 0, 0, 0.5));
+        }
+        .node:hover {
+            transform: scale(1.1);
+        }
+
+        /* Pulsing line animation (for a futuristic flow effect) */
+        @keyframes pulse-flow {
+            0% { stroke-dashoffset: 0; }
+            100% { stroke-dashoffset: -200; }
+        }
+
+        .pulsing-link {
+            stroke-dasharray: 10 5;
+            animation: pulse-flow 5s linear infinite;
+        }
+
+        /* Tooltip styling */
+        #tooltip {
+            position: fixed; /* Changed from absolute to fixed for more stable positioning relative to viewport */
+            background-color: #1e293b;
+            color: #e0e7ff;
+            padding: 8px 12px;
+            border-radius: 6px;
+            pointer-events: none; /* VERY IMPORTANT: Prevents tooltip from intercepting mouse events */
+            opacity: 0;
+            transition: opacity 0.2s;
+            max-width: 300px;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.4);
+            z-index: 100;
+        }
+    </style>
+</head>
+<body class="p-4 md:p-6">
+
+    <!-- Header and Navigation --><header class="mb-6">
+        <h1 class="text-3xl font-extrabold text-white mb-2">StoreDash Ecosystem Map</h1>
+        <p class="text-sm text-gray-400 mb-4">An interactive visualization of the StoreDash architecture layers.</p>
+
+        <!-- Navigation Tabs --><div id="tabs" class="flex flex-wrap gap-2 p-1 rounded-lg bg-gray-800 shadow-xl">
+            <button data-view="physical" class="tab-btn bg-blue-600 text-white font-semibold py-2 px-4 rounded-md transition duration-300 hover:bg-blue-700 text-sm">
+                How it physically connects
+            </button>
+            <button data-view="income" class="tab-btn text-gray-300 font-semibold py-2 px-4 rounded-md transition duration-300 hover:bg-gray-700 text-sm">
+                Where income comes from
+            </button>
+            <button data-view="data" class="tab-btn text-gray-300 font-semibold py-2 px-4 rounded-md transition duration-300 hover:bg-gray-700 text-sm">
+                How data flows
+            </button>
+            <button data-view="compliance" class="tab-btn text-gray-300 font-semibold py-2 px-4 rounded-md transition duration-300 hover:bg-gray-700 text-sm">
+                Compliance & Governance
+            </button>
+        </div>
+    </header>
+
+    <!-- Legend and Chart Container --><div id="chart-container" class="flex-grow rounded-lg shadow-2xl bg-gray-900 border border-gray-700/50">
+        <svg id="network-map" class="w-full h-full"></svg>
+        <div id="tooltip"></div>
+    </div>
+
+    <!-- JavaScript and D3 Implementation --><script>
+        // Global variables for Firebase access (Mandatory for the environment)
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        // Note: Firebase is not used for this static D3 visualization, but these vars are included for compliance.
+
+        // --- Configuration and Data ---
+
+        const COLOR = {
+            marketplace: '#0078FF', // Blue
+            physical: '#1D9BF0',    // Cyan
+            data: '#44D6AC',        // Green
+            compliance: '#FF66A8',  // Pink
+            revenue: '#FFD65F',     // Gold
+            ai_engine: '#A275FF',   // Purple
+            external: '#FFFFFF',    // White for solicitors
+        };
+
+        const NODE_DATA = [
+            // Core Hub (Ring 0 and 0.5 for AI Engine)
+            { id: 'marketplace', name: 'Marketplace', group: 'Core', ring: 0, color: COLOR.marketplace, description: 'Central platform for APIs, project data, and legal workflows.' },
+            // AI Engine is given a ring of 0.5 to place it just outside Ring 0, preventing overlap with Marketplace
+            { id: 'ai_engine', name: 'AI Engine', group: 'Core', ring: 0.5, color: COLOR.ai_engine, description: 'AI Engine powers automation across StoreDash — legal drafting, planning submissions, compliance, and retail optimisation.' },
+
+            // Physical & Data Layers (Ring 1)
+            { id: 'stores_ace', name: 'StoresAce', group: 'Data', ring: 1, color: COLOR.data, description: 'Operational truth (pricing, promotions, config).' },
+            { id: 'retail_pulse', name: 'RetailPulse', group: 'Data', ring: 1, color: COLOR.data, description: 'Analytics engine (forecasting, optimisation).' },
+            { id: 'nimbus', name: 'Nimbus', group: 'Data', ring: 1, color: COLOR.data, description: 'Property intelligence (feeds Marketplace & RetailPulse).' },
+            { id: 'jwo', name: 'JWO / Payments', group: 'Data', ring: 1, color: COLOR.data, description: 'Live behavioural data (non-POS/till transactions).' },
+            { id: 'kits_pods', name: 'Kits / Pods', group: 'Physical', ring: 1, color: COLOR.physical, description: 'Physical hardware purchasable in Marketplace.' },
+            { id: 'kodo', name: 'Kōdo', group: 'Physical', ring: 1, color: COLOR.physical, description: 'Store operating system hardware, sold via Marketplace.' },
+            { id: 'landlords', name: 'Landlords', group: 'Physical', ring: 1, color: COLOR.physical, description: 'Contracts and licences for physical sites.' },
+            { id: 'owned_stores', name: 'Owned Stores', group: 'Physical', ring: 1, color: COLOR.physical, description: 'Internal stores feeding Marketplace via indirect data.' },
+
+            // Compliance & AI Layer (Ring 2)
+            { id: 'legal', name: 'Legal', group: 'Compliance', ring: 2, color: COLOR.compliance, description: 'Legal document generation and compliance management.' },
+            { id: 'planning', name: 'Planning', group: 'Compliance', ring: 2, color: COLOR.compliance, description: 'Planning and zoning submission documents.' },
+            { id: 'rams', name: 'RAMS', group: 'Compliance', ring: 2, color: COLOR.compliance, description: 'Risk Assessment Method Statements.' },
+            { id: 'h_s', name: 'H&S / Fire', group: 'Compliance', ring: 2, color: COLOR.compliance, description: 'Health & Safety and Fire compliance documents.' },
+
+            // Revenue & Outputs (Ring 3)
+            { id: 'hardware_margin', name: 'Hardware Margin', group: 'Revenue', ring: 3, color: COLOR.revenue, description: 'Revenue generated from Kits and Kōdo hardware sales margins.' },
+            { id: 'software_subs', name: 'Software Subs', group: 'Revenue', ring: 3, color: COLOR.revenue, description: 'Subscription revenue from Marketplace, StoresAce, and RetailPulse.' },
+            { id: 'data_services', name: 'Data Services', group: 'Revenue', ring: 3, color: COLOR.revenue, description: 'Revenue from RetailPulse analytics and Nimbus insights.' },
+            { id: 'supplier_listings', name: 'Supplier Listings', group: 'Revenue', ring: 3, color: COLOR.revenue, description: 'Fees collected for supplier participation in the Marketplace.' },
+            { id: 'licensing', name: 'Licensing', group: 'Revenue', ring: 3, color: COLOR.revenue, description: 'Revenue from landlord models and white-label agreements.' },
+            { id: 'solicitors', name: '3rd Party Solicitors', group: 'External', ring: 3, color: COLOR.external, description: 'External legal sign-off and review.' },
+        ];
+
+        // Unique ID generator for links
+        let linkIdCounter = 0;
+        const createLink = (source, target, view, color, description, dasharray = 0) => ({
+            id: `link-${linkIdCounter++}`,
+            source,
+            target,
+            view,
+            color,
+            description,
+            dasharray,
+            isPulsing: (view === 'data') // Only data links pulse by default
+        });
+
+        const ALL_LINKS = [
+            // 1. Physical Connects
+            createLink('marketplace', 'kits_pods', 'physical', COLOR.marketplace, 'Marketplace orchestrates kit and site delivery via approved suppliers.'),
+            createLink('marketplace', 'kodo', 'physical', COLOR.marketplace, 'Marketplace orchestrates kit and site delivery via approved suppliers.'),
+            createLink('landlords', 'nimbus', 'physical', COLOR.physical, 'Landlord contracts feed property intelligence into Nimbus.'),
+            createLink('nimbus', 'landlords', 'physical', COLOR.physical, 'Property intelligence informs landlord selection.'),
+            createLink('nimbus', 'marketplace', 'physical', COLOR.physical, 'Nimbus feeds site information to Marketplace.'),
+            createLink('marketplace', 'nimbus', 'physical', COLOR.physical, 'Marketplace requests site data from Nimbus.'),
+            createLink('owned_stores', 'marketplace', 'physical', COLOR.physical, 'Owned Stores operational data feeds the core model.', '5, 5'), // Dotted link
+
+            // 2. Where Income Comes From
+            createLink('marketplace', 'hardware_margin', 'income', COLOR.revenue, 'Hardware Margin: Margin from Kits/Kōdo sales.'),
+            createLink('hardware_margin', 'marketplace', 'income', COLOR.revenue, 'Hardware Margin: Margin from Kits/Kōdo sales.'), // Bidirectional for income
+            createLink('marketplace', 'software_subs', 'income', COLOR.revenue, 'Software Subscriptions: Revenue from Marketplace/StoresAce/RetailPulse.'),
+            createLink('software_subs', 'marketplace', 'income', COLOR.revenue, 'Software Subscriptions: Revenue from Marketplace/StoresAce/RetailPulse.'),
+            createLink('marketplace', 'data_services', 'income', COLOR.revenue, 'Data Services: Revenue from RetailPulse analytics and Nimbus insights.'),
+            createLink('data_services', 'marketplace', 'income', COLOR.revenue, 'Data Services: Revenue from RetailPulse analytics and Nimbus insights.'),
+            createLink('marketplace', 'supplier_listings', 'income', COLOR.revenue, 'Supplier Listings: Fees for supplier participation in the Marketplace.'),
+            createLink('supplier_listings', 'marketplace', 'income', COLOR.revenue, 'Supplier Listings: Fees for supplier participation in the Marketplace.'),
+            createLink('marketplace', 'licensing', 'income', COLOR.revenue, 'Licensing: Revenue from landlord models and white-label agreements.'),
+            createLink('licensing', 'marketplace', 'income', COLOR.revenue, 'Licensing: Revenue from landlord models and white-label agreements.'),
+
+            // 3. How Data Flows
+            createLink('jwo', 'stores_ace', 'data', COLOR.data, 'Live behavioral data from JWO/Payments feeds StoresAce operational truth.'),
+            createLink('stores_ace', 'retail_pulse', 'data', COLOR.data, 'Operational data moves into RetailPulse for analysis.'),
+            createLink('retail_pulse', 'nimbus', 'data', COLOR.data, 'RetailPulse analysis informs property intelligence.'),
+            createLink('nimbus', 'marketplace', 'data', COLOR.data, 'Property intelligence feeds core Marketplace setup.'),
+            createLink('marketplace', 'ai_engine', 'data', COLOR.ai_engine, 'AI Engine ingests Marketplace data for automation.'),
+            createLink('ai_engine', 'marketplace', 'data', COLOR.ai_engine, 'AI Engine outputs workflow updates to Marketplace.'),
+            createLink('ai_engine', 'retail_pulse', 'data', COLOR.ai_engine, 'AI Engine uses RetailPulse data for predictive analytics.'),
+
+            // 4. Compliance & Governance
+            createLink('marketplace', 'legal', 'compliance', COLOR.compliance, 'Marketplace triggers Legal document workflow generation.'),
+            createLink('marketplace', 'planning', 'compliance', COLOR.compliance, 'Marketplace triggers Planning submission document generation.'),
+            createLink('marketplace', 'rams', 'compliance', COLOR.compliance, 'Marketplace triggers RAMS document generation.'),
+            createLink('marketplace', 'h_s', 'compliance', COLOR.compliance, 'Marketplace triggers H&S/Fire compliance generation.'),
+            createLink('legal', 'solicitors', 'compliance', COLOR.compliance, 'Legal documents routed to 3rd Party Solicitors for external sign-off.'),
+            createLink('solicitors', 'legal', 'compliance', COLOR.compliance, 'Sign-off confirmed by 3rd Party Solicitors.'),
+            createLink('ai_engine', 'legal', 'compliance', COLOR.ai_engine, 'AI assists Legal document drafting and automation.'),
+            createLink('ai_engine', 'planning', 'compliance', COLOR.ai_engine, 'AI assists Planning submission workflow.'),
+            createLink('ai_engine', 'rams', 'compliance', COLOR.ai_engine, 'AI assists RAMS process.'),
+            createLink('ai_engine', 'h_s', 'compliance', COLOR.ai_engine, 'AI assists H&S/Fire compliance.'),
+        ];
+
+        // --- D3 Setup ---
+        const svg = d3.select('#network-map');
+        const tooltip = d3.select('#tooltip');
+        let width, height;
+        let simulation;
+        let linkGroup, nodeGroup, textGroup;
+
+        // Function to handle resize and initialization
+        function initializeChart() {
+            const container = d3.select('#chart-container').node();
+            width = container.clientWidth;
+            height = container.clientHeight;
+            svg.attr('width', width).attr('height', height);
+
+            // Clear previous elements
+            svg.selectAll('*').remove();
+
+            // Setup SVG groups
+            linkGroup = svg.append('g').attr('class', 'links');
+            nodeGroup = svg.append('g').attr('class', 'nodes');
+            textGroup = svg.append('g').attr('class', 'texts');
+
+            // Define arrow markers for directed links
+            svg.append('defs').selectAll('marker')
+                .data(Object.values(COLOR).filter(c => c !== COLOR.external))
+                .enter().append('marker')
+                .attr('id', d => `arrow-${d.replace('#', '')}`)
+                .attr('viewBox', '0 -5 10 10')
+                .attr('refX', 18) // Offset to sit outside the node circle
+                .attr('refY', 0)
+                .attr('markerWidth', 5)
+                .attr('markerHeight', 5)
+                .attr('orient', 'auto')
+                .attr('fill', d => d)
+                .append('path')
+                .attr('d', 'M0,-5L10,0L0,5');
+
+            // Initialize simulation
+            simulation = d3.forceSimulation(NODE_DATA)
+                .force('link', d3.forceLink().id(d => d.id).distance(100)) // Link distance
+                .force('charge', d3.forceManyBody().strength(-250)) // Increased repulsion for better breathing room
+                .force('center', d3.forceCenter(width / 2, height / 2)) // Center attraction
+                .force('ring_force', ringForce()); // Custom radial force
+
+            // Start with the default view
+            updateSimulation('physical');
+        }
+
+        // Custom force to constrain nodes to radial rings
+        function ringForce() {
+            const strength = 0.5; // Strength of attraction to the ring
+            // Radii reduced to bring rings closer together for "tighter" packing
+            const rings = {
+                0: 0,    // Marketplace is at the very center
+                0.5: 70, // AI Engine slightly offset from center (was 80)
+                1: 150,  // Inner ring (was 180)
+                2: 250,  // Mid-outer ring (was 300)
+                3: 350   // Outer ring (was 420)
+            };
+
+            function force(alpha) {
+                NODE_DATA.forEach(d => {
+                    const r = rings[d.ring]; // Get radius based on node's ring
+                    const cx = width / 2;
+                    const cy = height / 2;
+
+                    // Calculate vector from center to current position
+                    const dx = d.x - cx;
+                    const dy = d.y - cy;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+
+                    // If node is exactly at the center (r=0), give it a slight initial push if it's not Marketplace
+                    if (r === 0 && d.id !== 'marketplace') {
+                         d.vx += (Math.random() - 0.5) * alpha * 10;
+                         d.vy += (Math.random() - 0.5) * alpha * 10;
+                         return;
+                    }
+
+
+                    // Calculate force vector towards the target radius
+                    const factor = (distance - r) * strength * alpha;
+
+                    // Apply force to the velocity components (adjusting for center offset)
+                    d.vx -= factor * (dx / distance);
+                    d.vy -= factor * (dy / distance);
+
+                    // Special handling to ensure AI engine stays below Marketplace,
+                    // by pushing its Y coordinate slightly down if it tries to go above
+                    if (d.id === 'ai_engine' && d.y < cy) {
+                         d.vy += (cy - d.y) * 0.05 * alpha; // Gentle push downwards
+                    }
+                });
+            }
+            return force;
+        }
+        
+        // Helper function to get node radius
+        // Regular nodes are now 14px (20% larger than 12px), Marketplace remains 25px
+        const getRadius = (d) => d.ring === 0 ? 25 : 14; 
+
+        // Function to update links, nodes, and restart simulation
+        function updateSimulation(activeView) {
+            const filteredLinks = ALL_LINKS.filter(l => l.view === activeView);
+            const nodes = NODE_DATA;
+
+            // 1. Update Links (Lines)
+            const links = linkGroup.selectAll('path.link')
+                .data(filteredLinks, d => d.id);
+
+            // Exit (Remove old links)
+            links.exit().transition().duration(500)
+                .attr('stroke-opacity', 0)
+                .remove();
+
+            // Enter (Add new links)
+            const linksEnter = links.enter().append('path')
+                .attr('class', 'link')
+                .attr('stroke-width', 2)
+                .attr('stroke-opacity', 0)
+                .attr('fill', 'none')
+                .attr('marker-end', d => `url(#arrow-${d.color.replace('#', '')})`)
+                .attr('stroke-dasharray', d => d.dasharray)
+                .classed('pulsing-link', d => d.isPulsing) // Apply pulsing class if required
+                .on('mouseover', (event, d) => showTooltip(event, d.description))
+                .on('mouseout', hideTooltip);
+
+            // Merge and update transition
+            links.merge(linksEnter)
+                .transition().duration(1000)
+                .attr('stroke', d => d.color)
+                .attr('stroke-opacity', 0.6)
+                .attr('marker-end', d => `url(#arrow-${d.color.replace('#', '')})`);
+
+
+            // 2. Update Nodes (Circles and Text)
+            const nodeElements = nodeGroup.selectAll('circle.node')
+                .data(nodes, d => d.id);
+
+            nodeElements.enter().append('circle')
+                .attr('class', 'node')
+                .attr('r', getRadius) // Use new radius: 25px for Marketplace, 14px for others
+                .attr('fill', d => d.color)
+                .style('stroke', '#ffffff20')
+                .style('stroke-width', 2)
+                .merge(nodeElements)
+                .on('mouseover', (event, d) => showTooltip(event, d.description))
+                .on('mouseout', hideTooltip);
+
+            const textElements = textGroup.selectAll('text.node-label')
+                .data(nodes, d => d.id);
+
+            textElements.enter().append('text')
+                .attr('class', 'node-label text-xs pointer-events-none')
+                .attr('text-anchor', 'middle')
+                .attr('fill', '#ffffff') // Text color set to white for internal contrast
+                .style('filter', 'drop-shadow(0 0 1px #000)')
+                .text(d => d.name)
+                .merge(textElements);
+
+            // 3. Restart Simulation
+            simulation.nodes(nodes);
+            simulation.force('link').links(filteredLinks);
+            simulation.alpha(1).restart(); // High alpha for smooth, fast transition
+
+            // 4. Tick function updates positions
+            simulation.on('tick', () => {
+                linkGroup.selectAll('path.link')
+                    .attr('d', d => {
+                        // This calculates the path line slightly offset from the node edge to accommodate the arrow marker
+                        const dx = d.target.x - d.source.x;
+                        const dy = d.target.y - d.source.y;
+                        const dr = Math.sqrt(dx * dx + dy * dy);
+
+                        // Arrow offset logic (to ensure arrow head touches the node boundary)
+                        const sourceRadius = getRadius(d.source);
+                        const targetRadius = getRadius(d.target);
+
+                        // Calculate normalized vector components
+                        const ux = dx / dr;
+                        const uy = dy / dr;
+
+                        // Start point offset from source node boundary
+                        const startX = d.source.x + ux * sourceRadius;
+                        const startY = d.source.y + uy * sourceRadius;
+
+                        // End point offset from target node boundary (for arrow to point slightly inside)
+                        const endX = d.target.x - ux * (targetRadius + 5); // +5 for marker width buffer
+                        const endY = d.target.y - uy * (targetRadius + 5);
+
+                        return `M${startX},${startY} L${endX},${endY}`;
+                    });
+
+
+                nodeGroup.selectAll('circle.node')
+                    .attr('cx', d => d.x)
+                    .attr('cy', d => d.y);
+
+                textGroup.selectAll('text.node-label')
+                    .attr('x', d => d.x)
+                    .attr('y', d => d.y + 3) // Adjusted offset to vertically center text inside the circle
+                    .style('font-weight', d => d.ring === 0 ? 'bold' : 'normal'); // Make core nodes bold
+            });
+        }
+
+        // --- Interactivity (Tabs and Tooltip) ---
+
+        const tabButtons = document.querySelectorAll('.tab-btn');
+        tabButtons.forEach(button => {
+            button.addEventListener('click', (event) => {
+                const view = event.currentTarget.dataset.view;
+                
+                // Update button styles
+                tabButtons.forEach(btn => {
+                    if (btn.dataset.view === view) {
+                        btn.classList.replace('text-gray-300', 'text-white');
+                        btn.classList.replace('hover:bg-gray-700', 'hover:bg-blue-700');
+                        btn.classList.add('bg-blue-600');
+                    } else {
+                        btn.classList.replace('bg-blue-600', 'bg-transparent');
+                        btn.classList.replace('hover:bg-blue-700', 'hover:bg-gray-700');
+                        btn.classList.replace('text-white', 'text-gray-300');
+                    }
+                });
+
+                // Update the D3 visualization
+                updateSimulation(view);
+
+                // Optional: Show main context text for the view
+                let context = '';
+                switch (view) {
+                    case 'physical':
+                        context = 'Marketplace orchestrates kit and site delivery via approved suppliers and landlords.';
+                        break;
+                    case 'income':
+                        context = 'Revenue is generated through sales margins, subscriptions, data monetisation, supplier listings, and site licensing.';
+                        break;
+                    case 'data':
+                        context = 'Data moves from customer transactions through StoresAce into RetailPulse for analysis, then feeds back to optimize store operations.';
+                        break;
+                    case 'compliance':
+                        context = 'AI auto-generates compliance documents, routed to external sign-off for faster deployment.';
+                        break;
+                }
+                const headerText = d3.select('header p');
+                headerText.transition().duration(300).style('opacity', 0)
+                    .on('end', () => {
+                        headerText.text(context);
+                        headerText.transition().duration(300).style('opacity', 1);
+                    });
+            });
+        });
+
+        // Tooltip functions
+        function showTooltip(event, text) {
+            tooltip
+                .style('opacity', 1)
+                .html(`<p class="font-bold mb-1">${text}</p>`)
+                // Use clientX/Y for position relative to viewport
+                .style('left', `${event.clientX + 15}px`) 
+                .style('top', `${event.clientY + 15}px`);
+        }
+
+        function hideTooltip() {
+            tooltip.style('opacity', 0);
+        }
+
+        // --- Main Execution ---
+        window.addEventListener('load', initializeChart);
+        window.addEventListener('resize', initializeChart);
+
+    </script>
+</body>
+</html>
